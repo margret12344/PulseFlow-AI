@@ -1,0 +1,11 @@
+﻿app:
+  name: PulseFlow AI
+  environment: development
+  debug: true
+  timezone: Africa/Cairo
+
+paths:
+  data: data
+  knowledge_base: knowledge_base
+  storage: storage
+  logs: logs

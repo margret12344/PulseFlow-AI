@@ -47,3 +47,8 @@ chroma_data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local datasets and generated data
+data/raw/
+data/interim/
+data/processed/

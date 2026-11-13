@@ -1,0 +1,17 @@
+
+# Data Engineering
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+openpyxl>=3.1,<4.0
+
+# Data Validation and Configuration
+pydantic>=2.9,<3.0
+pydantic-settings>=2.5,<3.0
+python-dotenv>=1.0,<2.0
+PyYAML>=6.0,<7.0
+
+# Logging
+structlog>=24.4,<26.0
+
+# Parquet Storage
+pyarrow>=17,<25

@@ -1,0 +1,6 @@
+﻿logging:
+  level: INFO
+  format: json
+  output: logs/pulseflow.log
+  console: true
+  file: true

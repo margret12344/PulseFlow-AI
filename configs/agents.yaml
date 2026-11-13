@@ -1,0 +1,14 @@
+﻿agents:
+  triage:
+    enabled: true
+  knowledge:
+    enabled: true
+  safety:
+    enabled: true
+  routing:
+    enabled: true
+  response:
+    enabled: true
+
+human_review:
+  enabled: true
