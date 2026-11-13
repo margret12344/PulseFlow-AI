@@ -1,0 +1,49 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Local databases and runtime storage
+*.db
+*.sqlite
+*.sqlite3
+storage/*
+!storage/.gitkeep
+
+# Model and cache files
+.cache/
+models/
+chroma_data/
+
+# OS
+.DS_Store
+Thumbs.db
