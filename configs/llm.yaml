@@ -1,6 +1,6 @@
 ﻿llm:
   provider: ollama
-  model: null
+  model: qwen2.5:3b
   temperature: 0.0
-  timeout: 60
+  timeout: 120
   max_retries: 2
