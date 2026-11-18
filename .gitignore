@@ -56,3 +56,5 @@ data/processed/
 
 # Knowledge base vector database
 data/knowledge_base/processed/
+__pycache__/
+*.py[cod]
