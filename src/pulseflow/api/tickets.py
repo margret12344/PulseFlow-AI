@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 import pulseflow.database.models  # noqa: F401
 from pulseflow.api.dependencies import get_db
-from pulseflow.api.schemas import TicketCreate, TicketRead, TicketStatusUpdate
+from pulseflow.api.schemas import (
+    TicketCreate,
+    TicketEventRead,
+    TicketRead,
+    TicketStatusUpdate,
+)
 from pulseflow.database.models.tickets import Ticket, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
@@ -170,3 +175,38 @@ def update_ticket_status(
         ) from None
 
     return ticket
+
+@router.get(
+    "/{ticket_id}/events",
+    response_model=list[TicketEventRead],
+)
+def list_ticket_events(
+    ticket_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[TicketEvent]:
+    try:
+        ticket = db.get(Ticket, ticket_id)
+
+        if ticket is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ticket not found.",
+            )
+
+        statement = (
+            select(TicketEvent)
+            .where(TicketEvent.ticket_id == ticket_id)
+            .order_by(TicketEvent.created_at.asc(), TicketEvent.id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+
+        return list(db.scalars(statement).all())
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not retrieve ticket events.",
+        ) from None

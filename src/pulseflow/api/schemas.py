@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,3 +35,12 @@ class TicketStatusUpdate(BaseModel):
         "Resolved",
         "Closed",
     ]
+class TicketEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ticket_id: UUID
+    event_type: str
+    old_values: dict[str, Any] | None
+    new_values: dict[str, Any] | None
+    created_at: datetime    
