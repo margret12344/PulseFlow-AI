@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,3 +22,16 @@ class TicketRead(BaseModel):
     status: str
     priority: str | None
     created_at: datetime
+    resolved_at: datetime | None
+
+
+class TicketStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[
+        "Open",
+        "Assigned",
+        "In Progress",
+        "Resolved",
+        "Closed",
+    ]

@@ -32,7 +32,7 @@ class Ticket(Base):
     )
     priority: Mapped[str | None] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(
-        String(30), default="open", nullable=False
+        String(30), default="Open", nullable=False
     )
     location_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("locations.id")

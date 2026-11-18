@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -8,8 +9,8 @@ from sqlalchemy.orm import Session
 
 import pulseflow.database.models  # noqa: F401
 from pulseflow.api.dependencies import get_db
-from pulseflow.api.schemas import TicketCreate, TicketRead
-from pulseflow.database.models.tickets import Ticket
+from pulseflow.api.schemas import TicketCreate, TicketRead, TicketStatusUpdate
+from pulseflow.database.models.tickets import Ticket, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
 
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/tickets", tags=["Tickets"])
 @router.post(
     "",
     response_model=TicketRead,
+
     status_code=status.HTTP_201_CREATED,
 )
 def create_ticket(
@@ -83,5 +85,88 @@ def get_ticket(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ticket not found.",
         )
+
+    return ticket
+
+ALLOWED_TRANSITIONS = {
+    "Open": {"In Progress"},
+    "Assigned": {"In Progress"},
+    "In Progress": {"Resolved"},
+    "Resolved": {"Closed", "Open"},
+    "Closed": set(),
+}
+
+
+@router.patch("/{ticket_id}/status", response_model=TicketRead)
+def update_ticket_status(
+    ticket_id: UUID,
+    payload: TicketStatusUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Ticket:
+    try:
+        statement = (
+            select(Ticket)
+            .where(Ticket.id == ticket_id)
+            .with_for_update()
+        )
+        ticket = db.scalar(statement)
+
+        if ticket is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ticket not found.",
+            )
+
+        old_status = ticket.status
+        new_status = payload.status
+
+        if new_status == old_status:
+            return ticket
+
+        if new_status not in ALLOWED_TRANSITIONS.get(old_status, set()):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot change status from {old_status} to {new_status}.",
+            )
+
+        old_resolved_at = ticket.resolved_at
+
+        if new_status == "Resolved":
+            ticket.resolved_at = datetime.now(UTC)
+        elif new_status == "Open":
+            ticket.resolved_at = None
+
+        ticket.status = new_status
+
+        event = TicketEvent(
+            ticket_id=ticket.id,
+            event_type="status_changed",
+            old_values={
+                "status": old_status,
+                "resolved_at": (
+                    old_resolved_at.isoformat()
+                    if old_resolved_at is not None
+                    else None
+                ),
+            },
+            new_values={
+                "status": new_status,
+                "resolved_at": (
+                    ticket.resolved_at.isoformat()
+                    if ticket.resolved_at is not None
+                    else None
+                ),
+            },
+        )
+
+        db.add(event)
+        db.commit()
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not update the ticket.",
+        ) from None
 
     return ticket
