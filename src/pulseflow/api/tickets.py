@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session
 import pulseflow.database.models  # noqa: F401
 from pulseflow.api.dependencies import get_db
 from pulseflow.api.schemas import (
+    TicketAssignmentCreate,
     TicketCreate,
     TicketEventRead,
     TicketRead,
     TicketStatusUpdate,
 )
-from pulseflow.database.models.tickets import Ticket, TicketEvent
+from pulseflow.database.models.hospital import Department
+from pulseflow.database.models.tickets import Ticket, TicketAssignment, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
 
@@ -23,7 +25,6 @@ router = APIRouter(prefix="/tickets", tags=["Tickets"])
 @router.post(
     "",
     response_model=TicketRead,
-
     status_code=status.HTTP_201_CREATED,
 )
 def create_ticket(
@@ -43,6 +44,8 @@ def create_ticket(
         ) from None
 
     return ticket
+
+
 @router.get("", response_model=list[TicketRead])
 def list_tickets(
     db: Annotated[Session, Depends(get_db)],
@@ -59,8 +62,7 @@ def list_tickets(
         statement = statement.where(Ticket.status == ticket_status)
 
     statement = (
-        statement
-        .order_by(Ticket.created_at.desc(), Ticket.id.desc())
+        statement.order_by(Ticket.created_at.desc(), Ticket.id.desc())
         .offset(offset)
         .limit(limit)
     )
@@ -72,6 +74,8 @@ def list_tickets(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not retrieve tickets.",
         ) from None
+
+
 @router.get("/{ticket_id}", response_model=TicketRead)
 def get_ticket(
     ticket_id: UUID,
@@ -93,6 +97,7 @@ def get_ticket(
 
     return ticket
 
+
 ALLOWED_TRANSITIONS = {
     "Open": {"In Progress"},
     "Assigned": {"In Progress"},
@@ -109,11 +114,7 @@ def update_ticket_status(
     db: Annotated[Session, Depends(get_db)],
 ) -> Ticket:
     try:
-        statement = (
-            select(Ticket)
-            .where(Ticket.id == ticket_id)
-            .with_for_update()
-        )
+        statement = select(Ticket).where(Ticket.id == ticket_id).with_for_update()
         ticket = db.scalar(statement)
 
         if ticket is None:
@@ -149,9 +150,7 @@ def update_ticket_status(
             old_values={
                 "status": old_status,
                 "resolved_at": (
-                    old_resolved_at.isoformat()
-                    if old_resolved_at is not None
-                    else None
+                    old_resolved_at.isoformat() if old_resolved_at is not None else None
                 ),
             },
             new_values={
@@ -175,6 +174,7 @@ def update_ticket_status(
         ) from None
 
     return ticket
+
 
 @router.get(
     "/{ticket_id}/events",
@@ -210,3 +210,100 @@ def list_ticket_events(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not retrieve ticket events.",
         ) from None
+@router.post("/{ticket_id}/assignments", response_model=TicketRead)
+def assign_ticket(
+    ticket_id: UUID,
+    payload: TicketAssignmentCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Ticket:
+    try:
+        ticket = db.scalar(
+            select(Ticket)
+            .where(Ticket.id == ticket_id)
+            .with_for_update()
+        )
+
+        if ticket is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Ticket not found.",
+            )
+
+        department = db.get(Department, payload.department_id)
+
+        if department is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Department not found.",
+            )
+
+        if ticket.status not in {"Open", "Assigned"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only Open or Assigned tickets can be assigned.",
+            )
+
+        active_assignments = list(
+            db.scalars(
+                select(TicketAssignment).where(
+                    TicketAssignment.ticket_id == ticket_id,
+                    TicketAssignment.ended_at.is_(None),
+                )
+            ).all()
+        )
+
+        if (
+            ticket.status == "Assigned"
+            and ticket.assigned_department_id == department.id
+            and len(active_assignments) == 1
+            and active_assignments[0].department_id == department.id
+        ):
+            return ticket
+
+        changed_at = datetime.now(UTC)
+        old_department_id = ticket.assigned_department_id
+        old_status = ticket.status
+
+        for assignment in active_assignments:
+            assignment.ended_at = changed_at
+
+        db.add(
+            TicketAssignment(
+                ticket_id=ticket.id,
+                department_id=department.id,
+                assigned_at=changed_at,
+            )
+        )
+
+        ticket.assigned_department_id = department.id
+        ticket.status = "Assigned"
+
+        db.add(
+            TicketEvent(
+                ticket_id=ticket.id,
+                event_type="department_assigned",
+                old_values={
+                    "status": old_status,
+                    "assigned_department_id": (
+                        str(old_department_id)
+                        if old_department_id is not None
+                        else None
+                    ),
+                },
+                new_values={
+                    "status": ticket.status,
+                    "assigned_department_id": str(department.id),
+                },
+            )
+        )
+
+        db.commit()
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not assign the ticket.",
+        ) from None
+
+    return ticket

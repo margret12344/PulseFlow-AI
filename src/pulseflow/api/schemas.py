@@ -23,6 +23,7 @@ class TicketRead(BaseModel):
     priority: str | None
     created_at: datetime
     resolved_at: datetime | None
+    assigned_department_id: UUID | None
 
 
 class TicketStatusUpdate(BaseModel):
@@ -35,6 +36,8 @@ class TicketStatusUpdate(BaseModel):
         "Resolved",
         "Closed",
     ]
+
+
 class TicketEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,4 +46,17 @@ class TicketEventRead(BaseModel):
     event_type: str
     old_values: dict[str, Any] | None
     new_values: dict[str, Any] | None
-    created_at: datetime    
+    created_at: datetime
+
+
+class DepartmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    description: str | None
+
+class TicketAssignmentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    department_id: UUID

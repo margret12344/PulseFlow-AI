@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from pulseflow.api.departments import router as departments_router
 from pulseflow.api.dependencies import get_db
 from pulseflow.api.tickets import router as tickets_router
 
@@ -19,7 +20,10 @@ app = FastAPI(
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
+
 app.include_router(tickets_router)
+app.include_router(departments_router)
+
 
 @app.get("/health/db")
 def database_health_check(
