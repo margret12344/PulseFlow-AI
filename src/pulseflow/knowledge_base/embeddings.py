@@ -60,7 +60,11 @@ def embed_chunks(
         raise ValueError("No chunks provided for embedding.")
 
     texts = [
-        chunk["content"]
+        (
+            f"Document: {chunk['title']}\n\n{chunk['content']}"
+            if chunk.get("title")
+            else chunk["content"]
+        )
         for chunk in chunks
     ]
 
