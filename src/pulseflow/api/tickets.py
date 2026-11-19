@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import pulseflow.database.models  # noqa: F401
-from pulseflow.api.dependencies import get_db
+from pulseflow.api.dependencies import get_current_user, get_db, require_admin
 from pulseflow.api.schemas import (
     TicketAssignmentCreate,
     TicketCreate,
@@ -16,10 +16,24 @@ from pulseflow.api.schemas import (
     TicketRead,
     TicketStatusUpdate,
 )
-from pulseflow.database.models.hospital import Department
+from pulseflow.api.ticket_permissions import (
+    TicketAccess,
+    get_ticket_access,
+    require_ticket_editor,
+    ticket_read_condition,
+)
+from pulseflow.database.models.hospital import Department, User
 from pulseflow.database.models.tickets import Ticket, TicketAssignment, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
+
+ALLOWED_TRANSITIONS = {
+    "Open": {"In Progress"},
+    "Assigned": {"In Progress"},
+    "In Progress": {"Resolved"},
+    "Resolved": {"Closed", "Open"},
+    "Closed": set(),
+}
 
 
 @router.post(
@@ -30,8 +44,12 @@ router = APIRouter(prefix="/tickets", tags=["Tickets"])
 def create_ticket(
     payload: TicketCreate,
     db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Ticket:
-    ticket = Ticket(description=payload.description)
+    ticket = Ticket(
+        description=payload.description,
+        created_by=current_user.id,
+    )
 
     try:
         db.add(ticket)
@@ -49,6 +67,7 @@ def create_ticket(
 @router.get("", response_model=list[TicketRead])
 def list_tickets(
     db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(get_ticket_access)],
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ticket_status: Annotated[
@@ -56,7 +75,7 @@ def list_tickets(
         Query(alias="status", min_length=1, max_length=30),
     ] = None,
 ) -> list[Ticket]:
-    statement = select(Ticket)
+    statement = select(Ticket).where(ticket_read_condition(access))
 
     if ticket_status is not None:
         statement = statement.where(Ticket.status == ticket_status)
@@ -80,9 +99,15 @@ def list_tickets(
 def get_ticket(
     ticket_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(get_ticket_access)],
 ) -> Ticket:
     try:
-        ticket = db.get(Ticket, ticket_id)
+        ticket = db.scalar(
+            select(Ticket).where(
+                Ticket.id == ticket_id,
+                ticket_read_condition(access),
+            )
+        )
     except SQLAlchemyError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -98,23 +123,22 @@ def get_ticket(
     return ticket
 
 
-ALLOWED_TRANSITIONS = {
-    "Open": {"In Progress"},
-    "Assigned": {"In Progress"},
-    "In Progress": {"Resolved"},
-    "Resolved": {"Closed", "Open"},
-    "Closed": set(),
-}
-
-
 @router.patch("/{ticket_id}/status", response_model=TicketRead)
 def update_ticket_status(
     ticket_id: UUID,
     payload: TicketStatusUpdate,
     db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(require_ticket_editor)],
 ) -> Ticket:
     try:
-        statement = select(Ticket).where(Ticket.id == ticket_id).with_for_update()
+        statement = (
+            select(Ticket)
+            .where(
+                Ticket.id == ticket_id,
+                ticket_read_condition(access),
+            )
+            .with_for_update()
+        )
         ticket = db.scalar(statement)
 
         if ticket is None:
@@ -146,11 +170,14 @@ def update_ticket_status(
 
         event = TicketEvent(
             ticket_id=ticket.id,
+            actor_id=access.user.id,
             event_type="status_changed",
             old_values={
                 "status": old_status,
                 "resolved_at": (
-                    old_resolved_at.isoformat() if old_resolved_at is not None else None
+                    old_resolved_at.isoformat()
+                    if old_resolved_at is not None
+                    else None
                 ),
             },
             new_values={
@@ -183,11 +210,17 @@ def update_ticket_status(
 def list_ticket_events(
     ticket_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(get_ticket_access)],
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[TicketEvent]:
     try:
-        ticket = db.get(Ticket, ticket_id)
+        ticket = db.scalar(
+            select(Ticket).where(
+                Ticket.id == ticket_id,
+                ticket_read_condition(access),
+            )
+        )
 
         if ticket is None:
             raise HTTPException(
@@ -210,17 +243,18 @@ def list_ticket_events(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not retrieve ticket events.",
         ) from None
+
+
 @router.post("/{ticket_id}/assignments", response_model=TicketRead)
 def assign_ticket(
     ticket_id: UUID,
     payload: TicketAssignmentCreate,
     db: Annotated[Session, Depends(get_db)],
+    admin: Annotated[User, Depends(require_admin)],
 ) -> Ticket:
     try:
         ticket = db.scalar(
-            select(Ticket)
-            .where(Ticket.id == ticket_id)
-            .with_for_update()
+            select(Ticket).where(Ticket.id == ticket_id).with_for_update()
         )
 
         if ticket is None:
@@ -271,6 +305,7 @@ def assign_ticket(
             TicketAssignment(
                 ticket_id=ticket.id,
                 department_id=department.id,
+                assigned_by=admin.id,
                 assigned_at=changed_at,
             )
         )
@@ -281,6 +316,7 @@ def assign_ticket(
         db.add(
             TicketEvent(
                 ticket_id=ticket.id,
+                actor_id=admin.id,
                 event_type="department_assigned",
                 old_values={
                     "status": old_status,

@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from pulseflow.api.dependencies import get_db
+from pulseflow.api.dependencies import get_db, require_admin
 from pulseflow.api.tickets import router
-from pulseflow.database.models.hospital import Department
+from pulseflow.database.models.hospital import Department, User
 from pulseflow.database.models.tickets import Ticket, TicketAssignment, TicketEvent
 
 
@@ -38,11 +38,22 @@ def assignment_case():
     def override_db():
         yield db
 
+    admin = User(
+        id=uuid4(),
+        full_name="Synthetic Admin",
+        email="admin@pulseflow.example",
+        password_hash="unused-in-this-test",
+        is_active=True,
+    )
+
+    def override_admin():
+        return admin
+
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[require_admin] = override_admin
 
     with TestClient(app) as client:
         yield client, db, ticket, department
-
 
 def post_assignment(client, ticket, department):
     return client.post(

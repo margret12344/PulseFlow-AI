@@ -29,3 +29,7 @@ chromadb>=1.0,<2.0
 # API
 fastapi==0.163.2
 uvicorn[standard]==0.54.0
+# Authentication
+pwdlib[argon2]==0.4.2
+PyJWT==2.15.1
+python-multipart==0.0.34

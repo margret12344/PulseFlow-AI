@@ -56,7 +56,39 @@ class DepartmentRead(BaseModel):
     name: str
     description: str | None
 
+
 class TicketAssignmentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     department_id: UUID
+
+
+class TokenRead(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
+
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str
+    email: str
+    department_id: UUID | None
+    is_active: bool
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(min_length=1, max_length=150)
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=12, max_length=128)
+    department_id: UUID | None = None
+    role: Literal["requester", "support"] = "requester"
+
+
+class UserActiveUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: bool = Field(strict=True)
