@@ -22,7 +22,7 @@ from pulseflow.api.ticket_permissions import (
     require_ticket_editor,
     ticket_read_condition,
 )
-from pulseflow.database.models.hospital import Department, User
+from pulseflow.database.models.hospital import Department, Location, User
 from pulseflow.database.models.tickets import Ticket, TicketAssignment, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
@@ -46,14 +46,25 @@ def create_ticket(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Ticket:
-    ticket = Ticket(
-        description=payload.description,
-        created_by=current_user.id,
-    )
-
     try:
+        if payload.location_id is not None:
+            location = db.get(Location, payload.location_id)
+
+            if location is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Location not found.",
+                )
+
+        ticket = Ticket(
+            description=payload.description,
+            location_id=payload.location_id,
+            created_by=current_user.id,
+        )
+
         db.add(ticket)
         db.commit()
+
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
@@ -175,9 +186,7 @@ def update_ticket_status(
             old_values={
                 "status": old_status,
                 "resolved_at": (
-                    old_resolved_at.isoformat()
-                    if old_resolved_at is not None
-                    else None
+                    old_resolved_at.isoformat() if old_resolved_at is not None else None
                 ),
             },
             new_values={

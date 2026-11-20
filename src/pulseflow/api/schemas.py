@@ -10,7 +10,7 @@ class TicketCreate(BaseModel):
         str_strip_whitespace=True,
         extra="forbid",
     )
-
+    location_id: UUID | None = None
     description: str = Field(min_length=1, max_length=10000)
 
 
@@ -24,6 +24,7 @@ class TicketRead(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     assigned_department_id: UUID | None
+    location_id: UUID | None
 
 
 class TicketStatusUpdate(BaseModel):
@@ -92,3 +93,19 @@ class UserActiveUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     is_active: bool = Field(strict=True)
+
+
+class CategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    default_department_id: UUID | None
+
+
+class LocationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    description: str | None
