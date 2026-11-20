@@ -11,10 +11,12 @@ import pulseflow.database.models  # noqa: F401
 from pulseflow.api.dependencies import get_current_user, get_db, require_admin
 from pulseflow.api.schemas import (
     TicketAssignmentCreate,
+    TicketAssignmentRead,
     TicketCreate,
     TicketEventRead,
     TicketRead,
     TicketStatusUpdate,
+    TicketUpdate,
 )
 from pulseflow.api.ticket_permissions import (
     TicketAccess,
@@ -48,11 +50,9 @@ def create_ticket(
 ) -> Ticket:
     try:
         if payload.location_id is not None:
-            location = db.get(Location, payload.location_id)
-
-            if location is None:
+            if db.get(Location, payload.location_id) is None:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=404,
                     detail="Location not found.",
                 )
 
@@ -61,14 +61,13 @@ def create_ticket(
             location_id=payload.location_id,
             created_by=current_user.id,
         )
-
         db.add(ticket)
         db.commit()
 
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not save the ticket.",
         ) from None
 
@@ -85,11 +84,44 @@ def list_tickets(
         str | None,
         Query(alias="status", min_length=1, max_length=30),
     ] = None,
+    priority: Annotated[
+        str | None,
+        Query(min_length=1, max_length=30),
+    ] = None,
+    category_id: UUID | None = None,
+    department_id: UUID | None = None,
+    location_id: UUID | None = None,
+    search: Annotated[
+        str | None,
+        Query(min_length=1, max_length=200),
+    ] = None,
 ) -> list[Ticket]:
     statement = select(Ticket).where(ticket_read_condition(access))
 
-    if ticket_status is not None:
-        statement = statement.where(Ticket.status == ticket_status)
+    filters = (
+        (Ticket.status, ticket_status),
+        (Ticket.priority, priority),
+        (Ticket.category_id, category_id),
+        (Ticket.assigned_department_id, department_id),
+        (Ticket.location_id, location_id),
+    )
+
+    for column, value in filters:
+        if value is not None:
+            statement = statement.where(column == value)
+
+    if search is not None:
+        search_text = search.strip()
+
+        if not search_text:
+            raise HTTPException(
+                status_code=422,
+                detail="Search must contain non-whitespace characters.",
+            )
+
+        statement = statement.where(
+            Ticket.description.icontains(search_text, autoescape=True)
+        )
 
     statement = (
         statement.order_by(Ticket.created_at.desc(), Ticket.id.desc())
@@ -101,7 +133,7 @@ def list_tickets(
         return list(db.scalars(statement).all())
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not retrieve tickets.",
         ) from None
 
@@ -121,15 +153,12 @@ def get_ticket(
         )
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not retrieve the ticket.",
         ) from None
 
     if ticket is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Ticket not found.",
-        )
+        raise HTTPException(status_code=404, detail="Ticket not found.")
 
     return ticket
 
@@ -142,7 +171,7 @@ def update_ticket_status(
     access: Annotated[TicketAccess, Depends(require_ticket_editor)],
 ) -> Ticket:
     try:
-        statement = (
+        ticket = db.scalar(
             select(Ticket)
             .where(
                 Ticket.id == ticket_id,
@@ -150,13 +179,9 @@ def update_ticket_status(
             )
             .with_for_update()
         )
-        ticket = db.scalar(statement)
 
         if ticket is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ticket not found.",
-            )
+            raise HTTPException(status_code=404, detail="Ticket not found.")
 
         old_status = ticket.status
         new_status = payload.status
@@ -166,7 +191,7 @@ def update_ticket_status(
 
         if new_status not in ALLOWED_TRANSITIONS.get(old_status, set()):
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=409,
                 detail=f"Cannot change status from {old_status} to {new_status}.",
             )
 
@@ -179,43 +204,42 @@ def update_ticket_status(
 
         ticket.status = new_status
 
-        event = TicketEvent(
-            ticket_id=ticket.id,
-            actor_id=access.user.id,
-            event_type="status_changed",
-            old_values={
-                "status": old_status,
-                "resolved_at": (
-                    old_resolved_at.isoformat() if old_resolved_at is not None else None
-                ),
-            },
-            new_values={
-                "status": new_status,
-                "resolved_at": (
-                    ticket.resolved_at.isoformat()
-                    if ticket.resolved_at is not None
-                    else None
-                ),
-            },
+        db.add(
+            TicketEvent(
+                ticket_id=ticket.id,
+                actor_id=access.user.id,
+                event_type="status_changed",
+                old_values={
+                    "status": old_status,
+                    "resolved_at": (
+                        old_resolved_at.isoformat()
+                        if old_resolved_at is not None
+                        else None
+                    ),
+                },
+                new_values={
+                    "status": new_status,
+                    "resolved_at": (
+                        ticket.resolved_at.isoformat()
+                        if ticket.resolved_at is not None
+                        else None
+                    ),
+                },
+            )
         )
-
-        db.add(event)
         db.commit()
 
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not update the ticket.",
         ) from None
 
     return ticket
 
 
-@router.get(
-    "/{ticket_id}/events",
-    response_model=list[TicketEventRead],
-)
+@router.get("/{ticket_id}/events", response_model=list[TicketEventRead])
 def list_ticket_events(
     ticket_id: UUID,
     db: Annotated[Session, Depends(get_db)],
@@ -232,10 +256,7 @@ def list_ticket_events(
         )
 
         if ticket is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ticket not found.",
-            )
+            raise HTTPException(status_code=404, detail="Ticket not found.")
 
         statement = (
             select(TicketEvent)
@@ -249,7 +270,7 @@ def list_ticket_events(
 
     except SQLAlchemyError:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not retrieve ticket events.",
         ) from None
 
@@ -267,22 +288,19 @@ def assign_ticket(
         )
 
         if ticket is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Ticket not found.",
-            )
+            raise HTTPException(status_code=404, detail="Ticket not found.")
 
         department = db.get(Department, payload.department_id)
 
         if department is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=404,
                 detail="Department not found.",
             )
 
         if ticket.status not in {"Open", "Assigned"}:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=409,
                 detail="Only Open or Assigned tickets can be assigned.",
             )
 
@@ -341,14 +359,141 @@ def assign_ticket(
                 },
             )
         )
-
         db.commit()
 
     except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=503,
             detail="Could not assign the ticket.",
         ) from None
 
     return ticket
+
+
+@router.patch("/{ticket_id}", response_model=TicketRead)
+def update_ticket(
+    ticket_id: UUID,
+    payload: TicketUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(get_ticket_access)],
+) -> Ticket:
+    try:
+        ticket = db.scalar(
+            select(Ticket)
+            .where(
+                Ticket.id == ticket_id,
+                ticket_read_condition(access),
+            )
+            .with_for_update()
+        )
+
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+
+        if ticket.status == "Closed":
+            raise HTTPException(
+                status_code=409,
+                detail="Closed tickets cannot be edited.",
+            )
+
+        is_editor = bool(access.roles.intersection({"admin", "support"}))
+
+        if not is_editor and ticket.status != "Open":
+            raise HTTPException(
+                status_code=409,
+                detail="Requesters can only edit Open tickets.",
+            )
+
+        changes = payload.model_dump(exclude_unset=True)
+
+        if changes.get("location_id") is not None:
+            if db.get(Location, changes["location_id"]) is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Location not found.",
+                )
+
+        old_values = {}
+        new_values = {}
+
+        for field, new_value in changes.items():
+            old_value = getattr(ticket, field)
+
+            if old_value == new_value:
+                continue
+
+            old_values[field] = (
+                str(old_value) if isinstance(old_value, UUID) else old_value
+            )
+            new_values[field] = (
+                str(new_value) if isinstance(new_value, UUID) else new_value
+            )
+
+        if not new_values:
+            return ticket
+
+        for field in new_values:
+            setattr(ticket, field, changes[field])
+
+        db.add(
+            TicketEvent(
+                ticket_id=ticket.id,
+                actor_id=access.user.id,
+                event_type="ticket_updated",
+                old_values=old_values,
+                new_values=new_values,
+            )
+        )
+        db.commit()
+
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not update the ticket.",
+        ) from None
+
+    return ticket
+
+
+@router.get(
+    "/{ticket_id}/assignments",
+    response_model=list[TicketAssignmentRead],
+)
+def list_ticket_assignments(
+    ticket_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    access: Annotated[TicketAccess, Depends(get_ticket_access)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[TicketAssignment]:
+    try:
+        ticket = db.scalar(
+            select(Ticket).where(
+                Ticket.id == ticket_id,
+                ticket_read_condition(access),
+            )
+        )
+
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+
+        statement = (
+            select(TicketAssignment)
+            .where(TicketAssignment.ticket_id == ticket_id)
+            .order_by(
+                TicketAssignment.assigned_at.asc(),
+                TicketAssignment.id.asc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+
+        return list(db.scalars(statement).all())
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not retrieve ticket assignments.",
+        ) from None

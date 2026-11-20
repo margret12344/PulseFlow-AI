@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TicketCreate(BaseModel):
@@ -109,3 +109,38 @@ class LocationRead(BaseModel):
     id: UUID
     name: str
     description: str | None
+
+
+class TicketUpdate(BaseModel):
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        extra="forbid",
+    )
+
+    description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=10000,
+    )
+    location_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_changes(self) -> "TicketUpdate":
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one field to update.")
+
+        if "description" in self.model_fields_set and self.description is None:
+            raise ValueError("Description cannot be null.")
+
+        return self
+
+
+class TicketAssignmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ticket_id: UUID
+    department_id: UUID
+    assigned_by: UUID | None
+    assigned_at: datetime
+    ended_at: datetime | None
